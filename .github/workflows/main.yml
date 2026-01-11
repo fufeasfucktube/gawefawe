@@ -32,33 +32,33 @@ jobs:
           # 後続のステップで使えるように環境変数に保存
           echo "PASSWORD=${PASSWORD}" >> $GITHUB_ENV
 
-      # 3. code-serverとngrokを起動
-      - name: Start code-server and ngrok
+      # 3. code-serverとServeoを起動
+      - name: Start code-server and Serveo
         run: |
-          # ngrokをダウンロード
-          curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null && echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list && sudo apt update && sudo apt install ngrok
-          
-          # Dockerでcode-serverをバックグラウンドで起動
-          # - ポート8080で起動
-          # - 生成したパスワードを設定
-          # - リポジトリのルートディレクトリをコンテナの/home/coder/projectにマウント
+          # code-serverを起動 (上記と同じ)
           docker run -d --name code-server -p 127.0.0.1:8080:8080 \
             -e "PASSWORD=${PASSWORD}" \
             -v "${{ github.workspace }}:/home/coder/project" \
             codercom/code-server:latest
 
-          # ngrokをバックグラウンドで起動し、ローカルの8080番ポートにトンネル
-          ngrok http 8080 > /dev/null &
+          # Serveoを使ってトンネルを起動
+          # SSHをバックグラウンドで実行し、ログをserveo.logに出力
+          ssh -R 80:localhost:8080 serveo.net > serveo.log 2>&1 &
+          TUNNEL_PID=$!
 
-          # ngrokが起動するまで少し待つ
-          sleep 5
+          echo "⏳ Waiting for tunnel URL..."
+          sleep 10
 
-          # ngrokのAPIから公開URLを取得
-          URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          # ログから公開URLを抽出
+          URL=$(grep -m 1 'serveo.net' serveo.log | awk '{print $6}')
+          
+          if [ -z "$URL" ]; then
+            echo "❌ Failed to retrieve tunnel URL. Check the logs."
+            cat serveo.log
+            exit 1
+          fi
 
-          # 取得したURLをログに出力
           echo "🚀 Access your VS Code session at: ${URL}"
-          # 後続のステップで使えるように環境変数に保存
           echo "URL=${URL}" >> $GITHUB_ENV
 
       # 4. ワークフローが終了しないように待機
