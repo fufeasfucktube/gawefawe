@@ -1,74 +1,63 @@
-name: Launch VS Code Dev Server
+name: Launch VS Code Dev Server (Cloudflare Tunnel)
 
 on:
-  # 手動でワークフローを実行できるようにする
   workflow_dispatch:
 
 jobs:
   dev-server:
-    # Ubuntuの最新版ランナーを使用
     runs-on: ubuntu-latest
-    # セキュリティのため、必要な権限のみに絞る
     permissions:
       contents: read
-
-    # ジョブのタイムアウトを60分に設定（任意）
     timeout-minutes: 60
 
     steps:
-      # 1. リポジトリのコードをチェックアウト
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. セッション用のランダムなパスワードを生成
       - name: Generate Password
         run: |
-          # opensslを使って32文字のランダムな文字列を生成
           PASSWORD=$(openssl rand -base64 32)
-          # 生成したパスワードをログに一度だけ表示
           echo "🔐 The password for this session is: ${PASSWORD}"
-          # これ以降のログでパスワードがマスクされるように設定
           echo "::add-mask::${PASSWORD}"
-          # 後続のステップで使えるように環境変数に保存
           echo "PASSWORD=${PASSWORD}" >> $GITHUB_ENV
 
-      # 3. code-serverとServeoを起動
-      - name: Start code-server and Serveo
+      - name: Start code-server and Cloudflare Tunnel
         run: |
-          # code-serverを起動 (上記と同じ)
+          # code-serverを起動
           docker run -d --name code-server -p 127.0.0.1:8080:8080 \
             -e "PASSWORD=${PASSWORD}" \
             -v "${{ github.workspace }}:/home/coder/project" \
             codercom/code-server:latest
 
-          # Serveoを使ってトンネルを起動
-          # SSHをバックグラウンドで実行し、ログをserveo.logに出力
-          ssh -R 80:localhost:8080 serveo.net > serveo.log 2>&1 &
+          # cloudflaredをダウンロードしてインストール
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb
+          
+          # cloudflaredを使ってトンネルを起動
+          # --logfile を使うとログがファイルに出力され、安定しやすい
+          cloudflared tunnel --url localhost:8080 --logfile tunnel.log &
           TUNNEL_PID=$!
 
           echo "⏳ Waiting for tunnel URL..."
-          sleep 10
+          sleep 15 # 少し待ち時間を長くする
 
-          # ログから公開URLを抽出
-          URL=$(grep -m 1 'serveo.net' serveo.log | awk '{print $6}')
+          # ログからURLを正規表現で抽出する方法（より堅牢）
+          URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' tunnel.log | head -n 1)
           
           if [ -z "$URL" ]; then
             echo "❌ Failed to retrieve tunnel URL. Check the logs."
-            cat serveo.log
+            cat tunnel.log
             exit 1
           fi
 
           echo "🚀 Access your VS Code session at: ${URL}"
           echo "URL=${URL}" >> $GITHUB_ENV
 
-      # 4. ワークフローが終了しないように待機
       - name: Keep the server alive
         run: |
           echo "✅ VS Code server is running."
           echo "🛑 To stop the server, cancel this workflow run."
-          # ワークフローが手動でキャンセルされるまで実行し続ける
           while true; do
             sleep 30
-            # ハートビートとして定期的にログを出力
             echo "🔄 Server is still running at $(date)"
           done
